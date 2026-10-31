@@ -27,8 +27,13 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
+    }
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+        }
     }
     buildFeatures {
         compose = true
@@ -55,7 +60,7 @@ dependencies {
     
     // BitcoinJ
     implementation(libs.bitcoinj.core)
-    implementation("org.slf4j:slf4j-nop:1.7.30")
+    implementation("org.slf4j:slf4j-nop:2.0.16")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

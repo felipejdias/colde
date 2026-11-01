@@ -1,4 +1,4 @@
-package com.fjdias.cold_wallet_offline
+package app.colde
 
 import android.net.Uri
 import android.os.Bundle
@@ -26,7 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.fjdias.cold_wallet_offline.ui.theme.ColdwalletofflineTheme
+import app.colde.ui.theme.ColdwalletofflineTheme
 import java.time.LocalDate
 import org.bitcoinj.core.NetworkParameters
 import org.bitcoinj.params.MainNetParams

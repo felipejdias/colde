@@ -1,4 +1,4 @@
-package com.fjdias.cold_wallet_offline
+package app.colde
 
 import org.junit.Test
 

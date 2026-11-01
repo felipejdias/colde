@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.fjdias.cold_wallet_offline"
+    namespace = "app.colde"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.fjdias.cold_wallet_offline"
+        applicationId = "app.colde"
         minSdk = 26
         targetSdk = 36
         versionCode = 1

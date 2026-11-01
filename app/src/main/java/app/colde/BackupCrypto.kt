@@ -1,4 +1,4 @@
-package com.fjdias.cold_wallet_offline
+package app.colde
 
 import android.util.Base64
 import com.lambdapioneer.argon2kt.Argon2Kt

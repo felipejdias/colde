@@ -1,4 +1,4 @@
-package com.fjdias.cold_wallet_offline.ui.theme
+package app.colde.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

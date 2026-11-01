@@ -22,6 +22,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "cold-wallet-offline"
+rootProject.name = "Colde"
 include(":app")
  

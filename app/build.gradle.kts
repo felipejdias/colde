@@ -61,6 +61,7 @@ dependencies {
     // BitcoinJ
     implementation(libs.bitcoinj.core)
     implementation("org.slf4j:slf4j-nop:2.0.16")
+    implementation("com.lambdapioneer.argon2kt:argon2kt:1.6.0")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

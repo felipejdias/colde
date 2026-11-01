@@ -1,16 +1,21 @@
 package com.fjdias.cold_wallet_offline
 
+import android.net.Uri
 import android.os.Bundle
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -18,9 +23,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fjdias.cold_wallet_offline.ui.theme.ColdwalletofflineTheme
+import java.time.LocalDate
 import org.bitcoinj.core.NetworkParameters
 import org.bitcoinj.params.MainNetParams
 import org.bitcoinj.base.ScriptType
@@ -56,7 +63,37 @@ fun ColdWalletScreen() {
     var bitcoinAddress by remember { mutableStateOf("") }
     var extendedPubKey by remember { mutableStateOf("") }
     var passphrase by remember { mutableStateOf("") }
+    var showExportDialog by remember { mutableStateOf(false) }
+    var exportPassword by remember { mutableStateOf("") }
+    var exportPasswordConfirm by remember { mutableStateOf("") }
+    var exportError by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
     val params: NetworkParameters = MainNetParams.get()
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        if (uri != null && seedWords != null) {
+            runCatching {
+                val payload = BackupCrypto.buildPayload(
+                    mnemonic = seedWords!!,
+                    passphrase = passphrase.trim(),
+                    address = bitcoinAddress,
+                    xpub = extendedPubKey
+                )
+                val encrypted = BackupCrypto.encryptBackup(payload, exportPassword.toCharArray())
+                context.contentResolver.openOutputStream(uri)?.use {
+                    it.write(encrypted.toByteArray(Charsets.UTF_8))
+                } ?: error("Não foi possível abrir o arquivo")
+            }.onSuccess {
+                Toast.makeText(context, "Backup criptografado salvo", Toast.LENGTH_LONG).show()
+            }.onFailure {
+                Toast.makeText(context, "Falha ao salvar: ${it.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+        exportPassword = ""
+        exportPasswordConfirm = ""
+    }
 
     fun generateNewWallet() {
         val secureRandom = SecureRandom()
@@ -200,6 +237,15 @@ fun ColdWalletScreen() {
                 }
             }
 
+            Spacer(modifier = Modifier.height(24.dp))
+
+            OutlinedButton(
+                onClick = { showExportDialog = true },
+                modifier = Modifier.fillMaxWidth().height(56.dp)
+            ) {
+                Text("EXPORTAR BACKUP CRIPTOGRAFADO")
+            }
+
             Spacer(modifier = Modifier.height(32.dp))
         }
 
@@ -219,6 +265,71 @@ fun ColdWalletScreen() {
             "Certifique-se de estar offline ao usar este app.",
             fontSize = 11.sp,
             color = Color.Gray
+        )
+    }
+
+    if (showExportDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showExportDialog = false
+                exportError = null
+            },
+            title = { Text("Backup Criptografado") },
+            text = {
+                Column {
+                    Text(
+                        "O arquivo .colde sai com AES-256-GCM e chave derivada por Argon2id " +
+                        "(KDF memory-hard — resistente a brute force por GPU/ASIC). " +
+                        "Use uma senha longa: sem ela, nem o melhor KDF salva. " +
+                        "NÃO é recuperável — esqueceu, perdeu o backup.",
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = exportPassword,
+                        onValueChange = { exportPassword = it; exportError = null },
+                        label = { Text("Senha do backup (mín. 12 caracteres)") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = exportPasswordConfirm,
+                        onValueChange = { exportPasswordConfirm = it; exportError = null },
+                        label = { Text("Confirmar senha") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    exportError?.let {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    when {
+                        exportPassword.length < 12 ->
+                            exportError = "Senha curta demais — mínimo 12 caracteres."
+                        exportPassword != exportPasswordConfirm ->
+                            exportError = "As senhas não coincidem."
+                        else -> {
+                            showExportDialog = false
+                            exportError = null
+                            exportLauncher.launch("colde_backup_${LocalDate.now()}.colde")
+                        }
+                    }
+                }) { Text("Exportar") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showExportDialog = false
+                    exportError = null
+                }) { Text("Cancelar") }
+            }
         )
     }
 }

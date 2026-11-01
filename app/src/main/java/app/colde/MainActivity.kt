@@ -184,6 +184,7 @@ fun ColdWalletScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -351,6 +352,16 @@ fun ColdWalletScreen(
             "Certifique-se de estar offline ao usar este app.",
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+
+        Text(
+            text = "v${BuildConfig.VERSION_NAME} · ${BuildConfig.BUILD_TIMESTAMP}",
+            fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(8.dp)
         )
     }
 

@@ -61,8 +61,12 @@ jobs:
         id: ver
         run: |
           LAST_TAG=$(git tag --list 'v*' --sort=-v:refname | head -n1)
-          LAST_TAG=${LAST_TAG:-v1.0.0}
-          NEXT_TAG=$(echo "$LAST_TAG" | awk -F. -v OFS=. '{$NF=$NF+1; print}')
+          if [ -z "$LAST_TAG" ]; then
+            LAST_TAG="none"
+            NEXT_TAG="v1.0.0"
+          else
+            NEXT_TAG=$(echo "$LAST_TAG" | awk -F. -v OFS=. '{$NF=$NF+1; print}')
+          fi
           echo "last_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
           echo "tag=$NEXT_TAG" >> "$GITHUB_OUTPUT"
           echo "version=${NEXT_TAG#v}" >> "$GITHUB_OUTPUT"

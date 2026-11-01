@@ -1,3 +1,5 @@
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.util.Properties
 
 plugins {
@@ -34,6 +36,12 @@ android {
         versionName = System.getenv("VERSION_NAME") ?: "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField(
+            "String",
+            "BUILD_TIMESTAMP",
+            "\"${LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))}\""
+        )
     }
 
     buildTypes {
@@ -60,6 +68,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     packaging {
         resources {

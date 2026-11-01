@@ -1,10 +1,10 @@
 package app.colde
 
-import android.util.Base64
-import com.lambdapioneer.argon2kt.Argon2Kt
-import com.lambdapioneer.argon2kt.Argon2Mode
+import org.bouncycastle.crypto.generators.Argon2BytesGenerator
+import org.bouncycastle.crypto.params.Argon2Parameters
 import org.json.JSONObject
 import java.security.SecureRandom
+import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -50,7 +50,7 @@ object BackupCrypto {
 
     fun decryptBackup(envelope: String, password: CharArray): String {
         val root = JSONObject(envelope)
-        require(root.getString("format") == FORMAT) { "Arquivo não é um backup Colde" }
+        require(root.optString("format") == FORMAT) { "Arquivo não é um backup Colde" }
         val kdf = root.getJSONObject("kdf")
         require(kdf.getString("algo") == "argon2id") { "KDF não suportado" }
         val c = root.getJSONObject("cipher")
@@ -73,15 +73,16 @@ object BackupCrypto {
     private fun deriveKey(password: CharArray, salt: ByteArray, t: Int, m: Int, p: Int): ByteArray {
         val passwordBytes = String(password).toByteArray(Charsets.UTF_8)
         return try {
-            Argon2Kt().hash(
-                mode = Argon2Mode.ARGON2_ID,
-                password = passwordBytes,
-                salt = salt,
-                tCostInIterations = t,
-                mCostInKibibyte = m,
-                parallelism = p,
-                hashLengthInBytes = KEY_BYTES
-            ).rawHashAsByteArray()
+            val params = Argon2Parameters.Builder(Argon2Parameters.ARGON2_id)
+                .withVersion(Argon2Parameters.ARGON2_VERSION_13)
+                .withIterations(t)
+                .withMemoryAsKB(m)
+                .withParallelism(p)
+                .withSalt(salt)
+                .build()
+            val generator = Argon2BytesGenerator()
+            generator.init(params)
+            ByteArray(KEY_BYTES).also { generator.generateBytes(passwordBytes, it, 0, it.size) }
         } finally {
             passwordBytes.fill(0)
         }
@@ -96,6 +97,26 @@ object BackupCrypto {
             .put("xpub", xpub)
             .toString()
 
-    private fun b64(b: ByteArray): String = Base64.encodeToString(b, Base64.NO_WRAP)
-    private fun unb64(s: String): ByteArray = Base64.decode(s, Base64.NO_WRAP)
+    data class WalletPayload(
+        val mnemonic: List<String>,
+        val passphrase: String,
+        val address: String,
+        val xpub: String
+    )
+
+    fun parsePayload(payload: String): WalletPayload {
+        val json = JSONObject(payload)
+        require(json.optString("type") == "bip39-segwit-wallet") { "Payload não é uma carteira Colde" }
+        val mnemonic = json.getString("mnemonic").trim().split(Regex("\\s+"))
+        require(mnemonic.size == 12) { "Mnemonic deve ter 12 palavras" }
+        return WalletPayload(
+            mnemonic = mnemonic,
+            passphrase = json.optString("passphrase"),
+            address = json.getString("address"),
+            xpub = json.getString("xpub")
+        )
+    }
+
+    private fun b64(b: ByteArray): String = Base64.getEncoder().encodeToString(b)
+    private fun unb64(s: String): ByteArray = Base64.getDecoder().decode(s)
 }

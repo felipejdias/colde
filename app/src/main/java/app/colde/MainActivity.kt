@@ -1,5 +1,6 @@
 package app.colde
 
+import android.content.Context
 import android.net.Uri
 import android.os.Bundle
 import android.view.WindowManager
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.res.painterResource
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
@@ -21,17 +23,23 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.colde.ui.theme.ColdwalletofflineTheme
+import app.colde.ui.components.CustomThemeDialog
+import app.colde.ui.components.ThemePickerDialog
+import app.colde.ui.theme.AppTheme
+import app.colde.ui.theme.ColdeTheme
+import app.colde.ui.theme.CustomThemeColors
 import java.time.LocalDate
 import org.bitcoinj.core.NetworkParameters
 import org.bitcoinj.params.MainNetParams
 import org.bitcoinj.base.ScriptType
 import org.bitcoinj.wallet.DeterministicSeed
+import org.bitcoinj.wallet.KeyChainGroupStructure
 import org.bitcoinj.wallet.Wallet
 import java.security.SecureRandom
 
@@ -45,12 +53,33 @@ class MainActivity : ComponentActivity() {
         )
         enableEdgeToEdge()
         setContent {
-            ColdwalletofflineTheme {
+            val prefs = remember { getSharedPreferences("colde_prefs", Context.MODE_PRIVATE) }
+            var appTheme by remember { mutableStateOf(AppTheme.fromKey(prefs.getString("theme", null))) }
+            var customColors by remember {
+                mutableStateOf(CustomThemeColors.deserialize(prefs.getString("custom_theme", null)) ?: CustomThemeColors())
+            }
+
+            ColdeTheme(appTheme = appTheme, customColors = customColors) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    ColdWalletScreen()
+                    ColdWalletScreen(
+                        appTheme = appTheme,
+                        customColors = customColors,
+                        onThemeChange = { theme ->
+                            appTheme = theme
+                            prefs.edit().putString("theme", theme.name).apply()
+                        },
+                        onCustomColorsChange = { colors ->
+                            customColors = colors
+                            appTheme = AppTheme.CUSTOM
+                            prefs.edit()
+                                .putString("custom_theme", colors.serialize())
+                                .putString("theme", AppTheme.CUSTOM.name)
+                                .apply()
+                        }
+                    )
                 }
             }
         }
@@ -58,32 +87,43 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun ColdWalletScreen() {
+fun ColdWalletScreen(
+    appTheme: AppTheme,
+    customColors: CustomThemeColors,
+    onThemeChange: (AppTheme) -> Unit,
+    onCustomColorsChange: (CustomThemeColors) -> Unit
+) {
     var seedWords by remember { mutableStateOf<List<String>?>(null) }
     var bitcoinAddress by remember { mutableStateOf("") }
     var extendedPubKey by remember { mutableStateOf("") }
     var passphrase by remember { mutableStateOf("") }
+    var showThemeDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var exportPassword by remember { mutableStateOf("") }
     var exportPasswordConfirm by remember { mutableStateOf("") }
     var exportError by remember { mutableStateOf<String?>(null) }
+    var showImportDialog by remember { mutableStateOf(false) }
+    var importPassword by remember { mutableStateOf("") }
+    var importError by remember { mutableStateOf<String?>(null) }
+    var pendingEnvelope by remember { mutableStateOf<String?>(null) }
+    var pendingExportBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var showExportPassword by remember { mutableStateOf(false) }
+    var showImportPassword by remember { mutableStateOf(false) }
+    var showCustomThemeDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val params: NetworkParameters = MainNetParams.get()
 
     val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
+        contract = ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri: Uri? ->
-        if (uri != null && seedWords != null) {
+        // O picker do SAF joga o app pra background e o ON_STOP limpa a seed —
+        // por isso os bytes criptografados são gerados ANTES de abrir o picker
+        // e lidos de pendingExportBytes aqui (estado que a limpeza não toca).
+        val bytes = pendingExportBytes
+        if (uri != null && bytes != null) {
             runCatching {
-                val payload = BackupCrypto.buildPayload(
-                    mnemonic = seedWords!!,
-                    passphrase = passphrase.trim(),
-                    address = bitcoinAddress,
-                    xpub = extendedPubKey
-                )
-                val encrypted = BackupCrypto.encryptBackup(payload, exportPassword.toCharArray())
                 context.contentResolver.openOutputStream(uri)?.use {
-                    it.write(encrypted.toByteArray(Charsets.UTF_8))
+                    it.write(bytes)
                 } ?: error("Não foi possível abrir o arquivo")
             }.onSuccess {
                 Toast.makeText(context, "Backup criptografado salvo", Toast.LENGTH_LONG).show()
@@ -91,16 +131,36 @@ fun ColdWalletScreen() {
                 Toast.makeText(context, "Falha ao salvar: ${it.message}", Toast.LENGTH_LONG).show()
             }
         }
+        pendingExportBytes = null
         exportPassword = ""
         exportPasswordConfirm = ""
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.use {
+                    String(it.readBytes(), Charsets.UTF_8)
+                } ?: error("Não foi possível abrir o arquivo")
+            }.onSuccess {
+                pendingEnvelope = it
+                importError = null
+                showImportDialog = true
+            }.onFailure {
+                Toast.makeText(context, "Falha ao ler: ${it.message}", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     fun generateNewWallet() {
         val secureRandom = SecureRandom()
         // Cria uma seed determinística com 128 bits de entropia (12 palavras) + passphrase opcional
         val seed = DeterministicSeed(secureRandom, 128, passphrase.trim())
-        // Cria a carteira usando o padrão SegWit Nativo (Bech32 - começa com bc1)
-        val wallet = Wallet.fromSeed(params, seed, ScriptType.P2WPKH)
+        // Cria a carteira usando BIP84 (m/84'/0'/0') — o mesmo path da BlueWallet/Sparrow,
+        // então as 12 palavras restauram a mesma carteira em qualquer wallet padrão.
+        val wallet = Wallet.fromSeed(params, seed, ScriptType.P2WPKH, KeyChainGroupStructure.BIP43)
 
         seedWords = seed.mnemonicCode
         bitcoinAddress = wallet.currentReceiveAddress().toString()
@@ -131,9 +191,24 @@ fun ColdWalletScreen() {
             .verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            IconButton(
+                onClick = { showThemeDialog = true },
+                modifier = Modifier.testTag("ThemePickerButton")
+            ) {
+                Icon(
+                    painterResource(R.drawable.ic_palette),
+                    contentDescription = "Escolher tema",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
         Text("Gerador de Cold Wallet", fontSize = 24.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(8.dp))
-        Text("Offline & Matemático", color = Color.Gray)
+        Text("Offline & Matemático", color = MaterialTheme.colorScheme.onSurfaceVariant)
 
         Spacer(modifier = Modifier.height(32.dp))
 
@@ -155,25 +230,33 @@ fun ColdWalletScreen() {
             Spacer(modifier = Modifier.height(16.dp))
             Button(
                 onClick = { generateNewWallet() },
-                modifier = Modifier.fillMaxWidth().height(56.dp)
+                modifier = Modifier.fillMaxWidth().height(56.dp).testTag("GenerateWalletButton")
             ) {
                 Text("GERAR NOVA CARTEIRA")
             }
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = { importLauncher.launch(arrayOf("*/*")) },
+                modifier = Modifier.fillMaxWidth().height(56.dp).testTag("ImportBackupButton")
+            ) {
+                Text("IMPORTAR BACKUP .COLDE")
+            }
         } else {
             Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF9C4))
+                modifier = Modifier.fillMaxWidth().testTag("SeedCard"),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
                         "SUA SEED (12 PALAVRAS):",
                         fontWeight = FontWeight.Bold,
-                        color = Color.Red
+                        color = MaterialTheme.colorScheme.error
                     )
                     Text(
                         "Anote no papel em ordem. É a única forma de recuperar seu dinheiro.",
                         fontSize = 12.sp,
-                        lineHeight = 16.sp
+                        lineHeight = 16.sp,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer
                     )
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -187,9 +270,10 @@ fun ColdWalletScreen() {
                                 val index = (rowIndex * 2) + colIndex + 1
                                 Text(
                                     "$index. $word",
-                                    modifier = Modifier.weight(1f),
+                                    modifier = Modifier.weight(1f).testTag("SeedWord_$index"),
                                     fontSize = 18.sp,
-                                    fontWeight = FontWeight.Medium
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer
                                 )
                             }
                         }
@@ -208,9 +292,10 @@ fun ColdWalletScreen() {
                     SelectionContainer {
                         Text(
                             bitcoinAddress,
-                            color = Color(0xFF004D40),
+                            color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp
+                            fontSize = 16.sp,
+                            modifier = Modifier.testTag("BitcoinAddress")
                         )
                     }
                 }
@@ -229,9 +314,10 @@ fun ColdWalletScreen() {
                     SelectionContainer {
                         Text(
                             extendedPubKey,
-                            color = Color(0xFF004D40),
+                            color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
+                            fontSize = 14.sp,
+                            modifier = Modifier.testTag("ExtendedPubKey")
                         )
                     }
                 }
@@ -241,7 +327,7 @@ fun ColdWalletScreen() {
 
             OutlinedButton(
                 onClick = { showExportDialog = true },
-                modifier = Modifier.fillMaxWidth().height(56.dp)
+                modifier = Modifier.fillMaxWidth().height(56.dp).testTag("ExportBackupButton")
             ) {
                 Text("EXPORTAR BACKUP CRIPTOGRAFADO")
             }
@@ -255,7 +341,7 @@ fun ColdWalletScreen() {
         Button(
             onClick = { clearScreen() },
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth().testTag("ClearScreenButton")
         ) {
             Text("APAGAR TELA (SEGURANÇA)")
         }
@@ -264,7 +350,35 @@ fun ColdWalletScreen() {
         Text(
             "Certifique-se de estar offline ao usar este app.",
             fontSize = 11.sp,
-            color = Color.Gray
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+
+    if (showThemeDialog) {
+        ThemePickerDialog(
+            currentTheme = appTheme,
+            customColors = customColors,
+            onThemeSelected = { theme ->
+                if (theme == AppTheme.CUSTOM) {
+                    showThemeDialog = false
+                    showCustomThemeDialog = true
+                } else {
+                    onThemeChange(theme)
+                    showThemeDialog = false
+                }
+            },
+            onDismiss = { showThemeDialog = false }
+        )
+    }
+
+    if (showCustomThemeDialog) {
+        CustomThemeDialog(
+            initial = customColors,
+            onSave = { colors ->
+                onCustomColorsChange(colors)
+                showCustomThemeDialog = false
+            },
+            onDismiss = { showCustomThemeDialog = false }
         )
     }
 
@@ -290,22 +404,27 @@ fun ColdWalletScreen() {
                         value = exportPassword,
                         onValueChange = { exportPassword = it; exportError = null },
                         label = { Text("Senha do backup (mín. 12 caracteres)") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().testTag("ExportPasswordField"),
+                        visualTransformation = if (showExportPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            TextButton(onClick = { showExportPassword = !showExportPassword }) {
+                                Text(if (showExportPassword) "Ocultar" else "Mostrar", fontSize = 11.sp)
+                            }
+                        },
+                        singleLine = true
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = exportPasswordConfirm,
                         onValueChange = { exportPasswordConfirm = it; exportError = null },
                         label = { Text("Confirmar senha") },
-                        visualTransformation = PasswordVisualTransformation(),
+                        visualTransformation = if (showExportPassword) VisualTransformation.None else PasswordVisualTransformation(),
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().testTag("ExportConfirmField")
                     )
                     exportError?.let {
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                        Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("ExportError"))
                     }
                 }
             },
@@ -317,9 +436,25 @@ fun ColdWalletScreen() {
                         exportPassword != exportPasswordConfirm ->
                             exportError = "As senhas não coincidem."
                         else -> {
-                            showExportDialog = false
-                            exportError = null
-                            exportLauncher.launch("colde_backup_${LocalDate.now()}.colde")
+                            // Criptografa ANTES de abrir o picker: o ON_STOP dispara
+                            // clearScreen() e zera a seed enquanto o SAF está aberto.
+                            runCatching {
+                                pendingExportBytes = BackupCrypto.encryptBackup(
+                                    BackupCrypto.buildPayload(
+                                        mnemonic = seedWords!!,
+                                        passphrase = passphrase.trim(),
+                                        address = bitcoinAddress,
+                                        xpub = extendedPubKey
+                                    ),
+                                    exportPassword.toCharArray()
+                                ).toByteArray(Charsets.UTF_8)
+                            }.onSuccess {
+                                showExportDialog = false
+                                exportError = null
+                                exportLauncher.launch("colde_backup_${LocalDate.now()}.colde")
+                            }.onFailure {
+                                exportError = "Falha ao criptografar o backup."
+                            }
                         }
                     }
                 }) { Text("Exportar") }
@@ -328,6 +463,78 @@ fun ColdWalletScreen() {
                 TextButton(onClick = {
                     showExportDialog = false
                     exportError = null
+                }) { Text("Cancelar") }
+            }
+        )
+    }
+
+    if (showImportDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showImportDialog = false
+                importPassword = ""
+                importError = null
+                pendingEnvelope = null
+            },
+            title = { Text("Importar Backup") },
+            text = {
+                Column {
+                    Text(
+                        "Digite a senha do arquivo .colde para restaurar a carteira.",
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = importPassword,
+                        onValueChange = { importPassword = it; importError = null },
+                        label = { Text("Senha do backup") },
+                        modifier = Modifier.fillMaxWidth().testTag("ImportPasswordField"),
+                        visualTransformation = if (showImportPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            TextButton(onClick = { showImportPassword = !showImportPassword }) {
+                                Text(if (showImportPassword) "Ocultar" else "Mostrar", fontSize = 11.sp)
+                            }
+                        },
+                        singleLine = true
+                    )
+                    importError?.let {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val envelope = pendingEnvelope
+                    if (envelope == null) {
+                        importError = "Nenhum arquivo selecionado."
+                    } else {
+                        runCatching {
+                            BackupCrypto.parsePayload(
+                                BackupCrypto.decryptBackup(envelope, importPassword.toCharArray())
+                            )
+                        }.onSuccess { wallet ->
+                            seedWords = wallet.mnemonic
+                            passphrase = wallet.passphrase
+                            bitcoinAddress = wallet.address
+                            extendedPubKey = wallet.xpub
+                            showImportDialog = false
+                            importPassword = ""
+                            pendingEnvelope = null
+                            Toast.makeText(context, "Carteira restaurada do backup", Toast.LENGTH_LONG).show()
+                        }.onFailure {
+                            importError = "Senha incorreta ou arquivo inválido."
+                        }
+                    }
+                }) { Text("Importar") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showImportDialog = false
+                    importPassword = ""
+                    importError = null
+                    pendingEnvelope = null
                 }) { Text("Cancelar") }
             }
         )

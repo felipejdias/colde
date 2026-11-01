@@ -1,24 +1,47 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
 
+val keystoreProps = Properties().apply {
+    val propsFile = rootProject.file("keystore.properties")
+    if (propsFile.exists()) propsFile.inputStream().use(::load)
+}
+
+fun signingSecret(name: String): String? =
+    System.getenv(name) ?: keystoreProps.getProperty(name)
+
 android {
     namespace = "app.colde"
     compileSdk = 36
+
+    signingConfigs {
+        create("release") {
+            storeFile = signingSecret("RELEASE_STORE_FILE")?.let { rootProject.file(it) }
+            storePassword = signingSecret("RELEASE_STORE_PASSWORD")
+            keyAlias = signingSecret("RELEASE_KEY_ALIAS")
+            keyPassword = signingSecret("RELEASE_KEY_PASSWORD")
+        }
+    }
 
     defaultConfig {
         applicationId = "app.colde"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
+        versionName = System.getenv("VERSION_NAME") ?: "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
+            signingConfig = if (signingSecret("RELEASE_STORE_FILE") != null)
+                signingConfigs.getByName("release")
+            else
+                signingConfigs.getByName("debug")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -61,9 +84,9 @@ dependencies {
     // BitcoinJ
     implementation(libs.bitcoinj.core)
     implementation("org.slf4j:slf4j-nop:2.0.16")
-    implementation("com.lambdapioneer.argon2kt:argon2kt:1.6.0")
 
     testImplementation(libs.junit)
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

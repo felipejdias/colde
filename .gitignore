@@ -14,3 +14,10 @@
 .cxx
 local.properties
 /.idea/
+
+# Assinatura de release (nunca commitar)
+release.keystore
+keystore.properties
+keystore-base64.txt
+*.jks
+*.keystore

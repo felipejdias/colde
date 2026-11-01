@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Run unit tests
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Check signing secrets
+        run: |
+          if [ -z "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "::error::Secrets de assinatura não configurados. Adicione KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS e KEY_PASSWORD em Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - name: Decode keystore
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.keystore"
+
+      - name: Compute next tag
+        id: ver
+        run: |
+          LAST_TAG=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          LAST_TAG=${LAST_TAG:-v1.0.0}
+          NEXT_TAG=$(echo "$LAST_TAG" | awk -F. -v OFS=. '{$NF=$NF+1; print}')
+          echo "last_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
+          echo "tag=$NEXT_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${NEXT_TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "Última tag: $LAST_TAG -> nova: $NEXT_TAG"
+
+      - name: Build signed APK
+        env:
+          RELEASE_STORE_FILE: ${{ runner.temp }}/release.keystore
+          RELEASE_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          VERSION_NAME: ${{ steps.ver.outputs.version }}
+          VERSION_CODE: ${{ github.run_number }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease
+          mv app/build/outputs/apk/release/app-release.apk "colde-${{ steps.ver.outputs.tag }}.apk"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          LAST="${{ steps.ver.outputs.last_tag }}"
+          if git rev-parse -q --verify "refs/tags/$LAST" >/dev/null; then
+            RANGE="$LAST..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+          {
+            echo 'changelog<<EOF'
+            git log $RANGE --no-merges --pretty=format:'- %s (%h)'
+            echo ''
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Colde ${{ steps.ver.outputs.tag }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          generate_release_notes: true
+          files: colde-${{ steps.ver.outputs.tag }}.apk
